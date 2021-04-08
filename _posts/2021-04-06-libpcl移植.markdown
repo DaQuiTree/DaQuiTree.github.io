@@ -1,0 +1,424 @@
+---
+layout: post
+title:  "libpcl移植"
+date:   2021-04-06 10:17:48 +0800
+categories: jekyll update
+---
+
+## 简介：
+
+本文主要使用RK3326 SDK，记录了向buildroot中添加libpcl 软件包和编译的过程。并着重记录了对libpcl的依赖项libvtk的编译过程。
+
+
+
+## 正文：
+
+### 1.向buildroot中添加libvtk软件包：
+
+#### step1:
+
+添加 rk3326/buildroot/package/libvtk/Config.in:
+
+```bash
+################################################################################
+#
+# libvtk Config.in
+#
+################################################################################
+config BR2_PACKAGE_LIBVTK
+        select BR2_PACKAGE_XLIB_LIBXT
+        select BR2_PACKAGE_MESA3D
+        bool "libvtk"
+        help
+          The Visualization Toolkit
+
+```
+
+添加 rk3326/buildroot/package/libvtk/libvtk.mk:
+
+```bash
+################################################################################
+#
+# libvtk.mk
+#
+################################################################################
+LIBVTK_VERSION = v6.2.0
+LIBVTK_SOURCE = vtk-$(LIBVTK_VERSION).tar.bz2
+LIBVTK_SITE = https://gitlab.kitware.com/vtk/vtk/-/archive/v6.2.0
+LIBVTK_LICENSE = GPL-2.0
+LIBVTK_LICENSE_FILES = LICENCE.md
+LIBVTK_INSTALL_STAGING = YES
+
+$(eval $(cmake-package))
+
+
+```
+
+#### step 2:
+
+尝试编译：make libvtk -j8，报错如下：
+
+```bash
+...
+CMake Error at CMakeLists.txt:250 (find_package):
+
+Could not find a package configuration file provided by "VTKCompileTools"
+
+with any of the following names:
+
+VTKCompileToolsConfig.cmake
+vtkcompiletools-config.cmake
+
+...
+```
+
+**step 2.1:**
+
+既然报错就先尝试解决当前错误，定位错误位置CMakeLists.txt第250行：
+
+```Cmake
+248 if (CMAKE_CROSSCOMPILING AND NOT COMPILE_TOOLS_IMPORTED)
+249   # if CMAKE_CROSSCOMPILING is true, we need to import build-tools targets.
+250   find_package(VTKCompileTools REQUIRED)
+251   set (COMPILE_TOOLS_IMPORTED TRUE)
+252 endif()
+```
+
+看样子如果是交叉编译的情况需要依赖VTKCompileTools（但是和VTK相关的包是我新加入的，如果我不添加的话，buildroot里无论如何也找不到这个包）那这个包应该去哪里找呢？当然此时可以google一下。这里我们换一个思路，先看看不在交叉编译环境下是否可以顺利编译通过吧。
+
+**step 2.2:**
+
+[源码地址](https://gitlab.kitware.com/vtk/vtk/-/tags?page=2&sort=updated_desc)
+
+下载v6.2.0版本的代码，执行
+
+```bash
+cmake .
+```
+
+显然没有报"VTKCompileTools"的错误，但是却出现了：
+
+```bash
+CMake Error at CMake/vtkCompilerExtras.cmake:42 (if):
+  if given arguments:
+
+    "aarch64-buildroot-linux-gnu-gcc.br_real: error: ARGS: No such file or directory
+
+```
+
+google之后发现可以通过注释掉这一段，让cmake继续执行，
+
+```
+ 42   #if(${_gcc_version} VERSION_GREATER 4.2.0 AND BUILD_SHARED_LIBS
+ 43   #  AND HAVE_GCC_VISIBILITY AND VTK_USE_GCC_VISIBILITY
+ 44   #  AND NOT MINGW AND NOT CYGWIN)
+ 45     # Should only be set if GCC is newer than 4.2.0
+ 46   #  set(VTK_ABI_CXX_FLAGS "-fvisibility=hidden -fvisibility-inlines-hidden")
+ 47   #else()
+ 48   #  set(VTK_ABI_CXX_FLAGS "")
+ 49   #endif()
+
+```
+
+继续cmake，又出现类似的报错：
+
+```bash
+CMake Error at CMake/GenerateExportHeader.cmake:178 (if):
+  if given arguments:
+
+    "aarch64-buildroot-linux-gnu-gcc.br_real: error: ARGS: No such file or directory
+
+```
+
+Okay，继续注释掉。cmake终于可以执行到底了，生成了Makefile。于此同时，发现同级目录生成了我们需要的*“VTKCompileToolsConfig.cmake”*。现在让我们验证一下注释掉的两段代码对编译有没有影响：
+
+```bash
+make -j8
+```
+
+Okey，顺利编译通过。
+
+**step 2.3**
+
+既然有了我们需要的文件，那就先copy进交叉编译环境吧，看看会有什么效果。首先，修改一下libvtk.mk:
+
+```bash
+################################################################################
+#
+# libvtk
+#
+################################################################################
+LIBVTK_VERSION = v6.2.0
+LIBVTK_SOURCE = vtk-$(LIBVTK_VERSION).tar.bz2
+LIBVTK_SITE = https://gitlab.kitware.com/vtk/vtk/-/archive/v6.2.0
+LIBVTK_LICENSE = GPL-2.0
+LIBVTK_LICENSE_FILES = LICENCE.md
+LIBVTK_INSTALL_STAGING = YES
+
+#通过添加此句，指定了package位置
+LIBVTK_CONF_OPTS += -DVTKCompileTools_DIR=/home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0
+
+$(eval $(cmake-package))
+```
+
+我查看了一下“VTKCompileToolsConfig.cmake”,将四处路径相关的代码换成了交叉编译环境的路径。
+
+```cmake
+# Import target "vtkmkg3states" for configuration "Debug"
+set_property(TARGET vtkmkg3states APPEND PROPERTY IMPORTED_CONFIGURATIONS DEBUG)
+set_target_properties(vtkmkg3states PROPERTIES
+  IMPORTED_LOCATION_DEBUG "/home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/bin/vtkmkg3states-6.2"
+  ) #此处路径修改成了交叉编译环境源码的路径，一共四处
+
+```
+
+编译一下，Okay，step2的报错终于绕过去了，硬着头皮继续吧。
+
+#### step 3：
+
+继续编译，make libvtk -j8，出现了一系列TRY_RUN()的报错：
+
+```bash
+CMake Error: TRY_RUN() invoked in cross-compiling mode, please set the following cache variables appropriately:
+   CMAKE_REQUIRE_LARGE_FILE_SUPPORT (advanced)
+   CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT (advanced)
+For details see /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/TryRunResults.cmake
+
+```
+
+google之后了解到，这个错误的原因是：**cmake无法确定某些取决于target machine的参数，换句话说，对于VTK源码在交叉编译环境中有些参数需要人为补全。例如上述代码块中“最大文件数目”**。当然，考虑到这么多需要人为确认的参数，vtk代码把需要测试的参数一并输出到了*“TryRunResults.cmake"*文件中， 同时编译出了用于测试参数的bin文件。我们只需在target mechine上运行这些bin文件，并将结果统一记录到一个文件，再次cmake时告知即可。
+
+**step 3.1:**
+
+Okay，首先解决这个报错吧(*Tips:仔细读一下注释很有帮助*）。例如，我的*“TryRunResults.cmake"*中的第一项如下：
+
+```cmake
+#
+# TryRunResults.cmake
+#
+
+# CMAKE_REQUIRE_LARGE_FILE_SUPPORT
+#    indicates whether the executable would have been able to run on its
+#    target platform. If so, set CMAKE_REQUIRE_LARGE_FILE_SUPPORT to
+#    the exit code (in many cases 0 for success), otherwise enter "FAILED_TO_RUN".
+# CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT
+#    contains the text the executable would have printed on stdout and stderr.
+#    If the executable would not have been able to run, set CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT empty.
+#    Otherwise check if the output is evaluated by the calling CMake code. If so,
+#    check what the source file would have printed when called with the given arguments.
+# The HAVE_CMAKE_REQUIRE_LARGE_FILE_SUPPORT variable holds the build result for this TRY_RUN().
+#
+# Source file   : /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/CMakeFiles/CMakeTmp/src.cxx
+# Executable    : /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/CMakeFiles/cmTC_1c648-CMAKE_REQUIRE_LARGE_FILE_SUPPORT ## 需要执行的程序在此处
+# Run arguments :
+#    Called from: [2]   /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/CMake/CheckCXXSourceRuns.cmake
+#                 [1]   /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/CMakeLists.txt
+
+set( CMAKE_REQUIRE_LARGE_FILE_SUPPORT
+     "PLEASE_FILL_OUT-FAILED_TO_RUN"
+     CACHE STRING "Result from TRY_RUN" FORCE)
+
+set( CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT
+     "PLEASE_FILL_OUT-NOTFOUND"
+     CACHE STRING "Output from TRY_RUN" FORCE)
+
+```
+
+找到CMakeFiles/cmTC_1c648-CMAKE_REQUIRE_LARGE_FILE_SUPPORT这个bin文件，copy到target machine，执行，没有任何输出。执行：
+
+```bash
+# echo $?
+# 0 #输出 0
+```
+
+于是，*“TryRunResults.cmake"*第一项修改如下：
+
+```cmake
+#
+# TryRunResults.cmake
+#
+
+set( CMAKE_REQUIRE_LARGE_FILE_SUPPORT
+     "0"
+     CACHE STRING "Result from TRY_RUN" FORCE)
+
+set( CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT
+     ""
+     CACHE STRING "Output from TRY_RUN" FORCE)
+```
+
+Okay，一项接一项的修改完成，将*TryRunResults.cmake*重命名后得到[Preset.cmake](../source/libpcl/libvtk_Preset.cmake) （k3326芯片）。
+
+**step 3.2:**
+
+接下来继续修改libvtk.mk，我们需要告知cmake这些target machine的输出结果：
+
+```bash
+################################################################################
+#
+# libvtk
+#
+################################################################################
+LIBVTK_VERSION = v6.2.0
+LIBVTK_SOURCE = vtk-$(LIBVTK_VERSION).tar.bz2
+LIBVTK_SITE = https://gitlab.kitware.com/vtk/vtk/-/archive/v6.2.0
+LIBVTK_LICENSE = GPL-2.0
+LIBVTK_LICENSE_FILES = LICENCE.md
+LIBVTK_INSTALL_STAGING = YES
+
+# 通过此句在进行CMake是将Preset.cmake作为输入文件
+LIBVTK_CONF_OPTS += -C /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/Preset.cmake    /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/
+
+LIBVTK_CONF_OPTS += -DVTKCompileTools_DIR=/home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0
+
+$(eval $(cmake-package))
+
+```
+
+继续编译，Step 3的报错解决，生成了期待已久的Makefile，终于可以进行编译了。
+
+#### Step 4:
+
+继续执行 make -j8 libvtk,出现报错:
+
+```bash
+/home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/bin/H5make_libsettings: 1: /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/bin/H5make_libsettings:ELF▒x@@3@@@@@@▒@@@▒▒A▒AA▒@@: not found
+/home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/bin/H5make_libsettings: 2: /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libvtk-v6.2.0/bin/H5make_libsettings: Syntax error: "(" unexpected
+ThirdParty/hdf5/vtkhdf5/src/CMakeFiles/vtkhdf5.dir/build.make:65: recipe for target 'ThirdParty/hdf5/vtkhdf5/H5lib_settings.c' failed
+
+```
+
+经检查，猜测是在交叉编译环境下生成的bin文件夹中的文件，无法在host machine上运行。那么，在**step 2.2**中我们刚好在host上编译过源码。
+
+Okay，拷贝host machine生产的bin文件夹覆盖到buildroot中的libvtk-v6.2.0目录下。
+
+(***Tips:bin文件夹里的可执行文件依赖于同级目录下的 lib文件夹下的动态库文件，因此拷贝到buildroot中libvtk-v6.2.0的可执行文件依旧会链接到host machine的libvtk-v6.2.0的lib文件夹中。这就要求host machine就是你buildroot所在的那台PC。***)
+
+**继续编译，终于通过。**
+
+
+
+## 2.向buildroot中添加libpcl软件包：
+
+#### Step 1：
+
+添加 rk3326/buildroot/package/libpcl/Config.in:
+
+```bash
+config BR2_PACKAGE_LIBPCL
+        bool "libpcl"
+        select BR2_PACKAGE_LIBVTK
+        select BR2_PACKAGE_FLANN
+        select BR2_PACKAGE_MYSQL
+        select BR2_PACKAGE_ORACLE_MYSQL
+        select BR2_PACKAGE_QHULL
+        select BR2_PACKAGE_PYTHON_SPHINX
+        select BR2_PACKAGE_LIBUSB
+        select BR2_PACKAGE_EIGEN_UNSUPPORTED_MODULES
+        help
+          The Point Cloud Library
+          daqui modified
+
+```
+
+添加 rk3326/buildroot/package/libpcl/libpcl.mk:
+
+```cmake
+
+################################################################################
+#
+# libpcl
+#
+################################################################################
+LIBPCL_VERSION = 1.7.2
+LIBPCL_SOURCE = pcl-$(LIBPCL_VERSION).tar.gz
+LIBPCL_SITE = https://github.com/PointCloudLibrary/pcl/archive
+LIBPCL_LICENSE = GPL-2.0
+LIBPCL_LICENSE_FILES = LICENCE.md
+LIBPCL_INSTALL_STAGING = YES
+
+$(eval $(cmake-package))
+
+```
+
+buildroot中执行：
+
+```bash
+make libpcl -j8
+```
+
+出现熟悉的***TRY_RUN()***报错：
+
+```bash
+CMake Error: TRY_RUN() invoked in cross-compiling mode, please set the following cache variables appropriately:
+   HAVE_POSIX_MEMALIGN_EXITCODE (advanced)
+
+```
+
+效仿libvtk中的解决方法，拷贝TryRunResults.cmake并重命名为Preset.cmake，将target machine输出结果记录：
+
+[Preset.cmake](../source/libpcl/libpcl_Preset.cmake)
+
+与在libvtk中的处理方法相同，文件生成后需要在编译时告知cmake，修改libpcl.mk如下：
+
+```cmake
+################################################################################
+#
+# libpcl
+#
+################################################################################
+LIBPCL_VERSION = 1.7.2
+LIBPCL_SOURCE = pcl-$(LIBPCL_VERSION).tar.gz
+LIBPCL_SITE = https://github.com/PointCloudLibrary/pcl/archive
+LIBPCL_LICENSE = GPL-2.0
+LIBPCL_LICENSE_FILES = LICENCE.md
+LIBPCL_INSTALL_STAGING = YES
+
+LIBPCL_CONF_OPTS += -C /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libpcl-1.7.2/Preset.cmake /home/daquitree/RKSDK/rk3326/buildroot/output/rockchip_rk3326_robot64/build/libpcl-1.7.2/
+
+$(eval $(cmake-package))
+```
+
+#### Step 2:
+
+Okay，继续编译。在两个.h文件中出现两个相似的报错：
+
+```bash
+include/pcl/registration/correspondence_estimation_normal_shooting.h: In member function ‘void pcl::registration::CorrespondenceEstimationNormalShooting<PointSource, PointTarget, NormalT, Scalar>::getKSearch() const’:
+include/pcl/registration/correspondence_estimation_normal_shooting.h:184:41: error: return-statement with a value, in function returning 'void' [-fpermissive]
+         getKSearch () const { return (k_); }
+:registration::CorrespondenceEstimationBackProjection<PointSource, PointTarget, NormalT, Scalar>::getKSearch() const’:
+include/pcl/registration/correspondence_estimation_backprojection.h:188:41: error: return-statement with a value, in function returning 'void' [-fpermissive]
+         getKSearch () const { return (k_); }
+
+```
+
+看样子像是无返回值的函数却给了返回值，结合上下文看**k_**应当是个int类型的值：
+
+```cpp
+ /** \brief Set the number of nearest neighbours to be considered in the target
+          * point cloud. By default, we use k = 10 nearest neighbors.
+          *
+          * \param[in] k the number of nearest neighbours to be considered
+          */
+        inline void
+        setKSearch (unsigned int k) { k_ = k; }
+
+        /** \brief Get the number of nearest neighbours considered in the target point
+          * cloud for computing correspondences. By default we use k = 10 nearest
+          * neighbors.
+          */
+		//修改如下，两处修改类似，不再一一列出
+        //inline void
+        inline int //daquitree marked 
+        getKSearch () const { return (k_); }
+
+```
+
+**继续编译，然后的然后，libpcl顺利编过。**
+
+
+
+## 结语
+
+buildroot中添加libpcl大部分工作在于libvtk的编译与报错解决。在遇到报错时，根据报错反推问题，将猜测的解决方法进行逐一验证，这个过程很有挑战也很有意思。就像身处幽暗的洞穴中，只能看到一点点周围的环境，但是隐约能听到的洞外的声音让你相信可以走出去。也许对于嵌入式系统工程师来说，乐趣就来源于执着的相信，洞外有光。
