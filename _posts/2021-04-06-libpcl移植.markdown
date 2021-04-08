@@ -247,7 +247,7 @@ set( CMAKE_REQUIRE_LARGE_FILE_SUPPORT__TRYRUN_OUTPUT
      CACHE STRING "Output from TRY_RUN" FORCE)
 ```
 
-Okay，一项接一项的修改完成，将*TryRunResults.cmake*重命名后得到[Preset.cmake](../source/libpcl/libvtk_Preset.cmake) （k3326芯片）。
+Okay，一项接一项的修改完成，将*TryRunResults.cmake*重命名后得到[Preset.cmake](https://github.com/DaQuiTree/daquitree.github.io/blob/main/source/libpcl/libvtk_Preset.cmake) （k3326芯片）。
 
 **step 3.2:**
 
@@ -357,7 +357,7 @@ CMake Error: TRY_RUN() invoked in cross-compiling mode, please set the following
 
 效仿libvtk中的解决方法，拷贝TryRunResults.cmake并重命名为Preset.cmake，将target machine输出结果记录：
 
-[Preset.cmake](../source/libpcl/libpcl_Preset.cmake)
+[Preset.cmake](https://github.com/DaQuiTree/daquitree.github.io/blob/main/source/libpcl/libpcl_Preset.cmake)
 
 与在libvtk中的处理方法相同，文件生成后需要在编译时告知cmake，修改libpcl.mk如下：
 
