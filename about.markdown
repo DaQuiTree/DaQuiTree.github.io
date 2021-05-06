@@ -4,15 +4,15 @@ title: About
 permalink: /about/
 ---
 
-This is the base Jekyll theme. You can find out more info about customizing your Jekyll theme, as well as basic Jekyll usage documentation at [jekyllrb.com](https://jekyllrb.com/)
+本人三十，
 
-You can find the source code for Minima at GitHub:
-[jekyll][jekyll-organization] /
-[minima](https://github.com/jekyll/minima)
+一名直男型老公（坚决不改^-^），立志做个暖心爸比。
 
-You can find the source code for Jekyll at GitHub:
-[jekyll][jekyll-organization] /
-[jekyll](https://github.com/jekyll/jekyll)
+一名球风飘忽却向往飘逸的足球爱好者。
 
+一个爱好单片机、喜欢电子制作，希望钻研OS的嵌入式程序员。
 
-[jekyll-organization]: https://github.com/jekyll
+嗯，这里我就打算记录自己的部分生活了。
+
+这里虽然简陋点，却是独一无二的，是属于我的。
+
